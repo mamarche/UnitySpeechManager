@@ -13,29 +13,44 @@ public class SpeechManager : SpeechSingleton<SpeechManager>
 {
     [Header("Cognitive Services")]
     [SerializeField]
-    private string subscriptionKey;
+    [Tooltip("Copy you subscription key from Azure Cognitive Services Speech API service")]
+    private string subscriptionKey = "[your subscription key]";
     [SerializeField]
+    [Tooltip("The token request endpoint url")]
     private string tokenUrl = "https://westeurope.api.cognitive.microsoft.com/sts/v1.0/issuetoken";
     [SerializeField]
+    [Tooltip("The Speech To Text service endpoint url")]
     private string sttUrl = "https://westeurope.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1";
     [SerializeField]
+    [Tooltip("The Text to Speech service endpoint url")]
     private string ttsUrl = "https://westeurope.tts.speech.microsoft.com/cognitiveservices/v1";
 
     [Header("Text to Speech")]
     [SerializeField]
+    [Tooltip("Language for Text to Speech service")]
     private string ttsLanguage = "it-IT";
     [SerializeField]
+    [Tooltip("Audio clip format")]
     private string audioFormat = "riff-24khz-16bit-mono-pcm";
     [SerializeField]
+    [Tooltip("The voice to use for Text to Speech. (see: https://docs.microsoft.com/en-us/azure/cognitive-services/speech-service/language-support)")]
     private string voiceName = "Microsoft Server Speech Text to Speech Voice (it-IT, LuciaRUS)";
 
     [Header("Speech to Text")]
     [SerializeField]
-    private int recordingDuration = 3;
+    [Tooltip("Audio source component to use for recording voice")]
+    private AudioSource audioSource;
     [SerializeField]
+    [Tooltip("The minimum level of noise to still recording")]
+    private float minimumLevel = 0.00005f;
+    [SerializeField]
+    [Tooltip("Time to silence before stop recording")]
+    private float silenceTimeTreshold = 1.5f;
+    [SerializeField]
+    [Tooltip("Language for Speech to Text service")]
     private string sttLanguage = "it-IT";
-    private int _RATE = 16000;
-    private AudioClip _recordingClip;
+
+    private ListeningManager _listeningManager;
 
     private string _lastError;
 
@@ -56,23 +71,51 @@ public class SpeechManager : SpeechSingleton<SpeechManager>
     public event SpeechGenericHandler OnTextReceived;
     #endregion
 
+    void Awake()
+    {
+        _listeningManager = GetComponent<ListeningManager>();
+    }
+
+    void OnEnable()
+    {
+        _listeningManager.OnUtteranceEnded += listeningManager_OnUtteranceEnded;
+    }
+    void OnDisable()
+    {
+        _listeningManager.OnUtteranceEnded -= listeningManager_OnUtteranceEnded;
+    }
+
     private void Start()
     {
 
 #if UNITY_EDITOR
         System.Net.ServicePointManager.ServerCertificateValidationCallback += (a, b, c, d) => { return true; };
 #endif
+        _listeningManager.audioSource = audioSource;
+        _listeningManager.minimumLevel = minimumLevel;
+        _listeningManager.silenceTimeTreshold = silenceTimeTreshold;
+
         GetAccessToken();
     }
 
     #region Public Methods
+    /// <summary>
+    /// Call the Text to Speech service passing the text to be synthesized. 
+    /// When the service returns the audio clip, OnAudioReceived event is triggered
+    /// </summary>
+    /// <param name="text">The text to be synthesized</param>
     public void Speak(string text)
     {
         StartCoroutine(SpeakCoroutine(text));
     }
+    /// <summary>
+    /// Start recording until there is a silence that lasts as long as set in 'Silence Time Treshold' property,
+    /// and call the Speech to Text service passing the audio clip recorded.
+    /// When the service returns the text recognized, OnTextReceived event is triggered
+    /// </summary>
     public void Recognize()
     {
-        StartCoroutine(RecordingCoroutine(recordingDuration));
+        _listeningManager.StartListening();
     }
     #endregion
 
@@ -109,18 +152,10 @@ public class SpeechManager : SpeechSingleton<SpeechManager>
     #endregion
 
     #region Speech To Text
-    private IEnumerator RecordingCoroutine(int seconds)
+    private void listeningManager_OnUtteranceEnded(AudioClip clip)
     {
-        Debug.Log("Recording... ");
-        _recordingClip = Microphone.Start(null, false, seconds, _RATE);
-
-        Debug.Log("Recording... STARTED");
-        yield return new WaitForSeconds(seconds);
-        Debug.Log("Recording... DONE");
-
         Debug.Log("Recognizing...");
-        yield return StartCoroutine(RecognizeCoroutine(_recordingClip));
-
+        StartCoroutine(RecognizeCoroutine(clip));
     }
     private IEnumerator RecognizeCoroutine(AudioClip clip)
     {
@@ -189,7 +224,6 @@ public class SpeechManager : SpeechSingleton<SpeechManager>
             AudioClip clip = ParseWAV("audio", resultContent);
             PlayClip(clip);
         }
-
     }
     private void PlayClip(AudioClip clip)
     {
@@ -240,23 +274,6 @@ public class SpeechManager : SpeechSingleton<SpeechManager>
         handle.Free();
 
         return theStructure;
-    }
-    private static void WriteType<T>(BinaryWriter writer, T data)
-    {
-        int size = Marshal.SizeOf(data);
-        byte[] bytes = new byte[size];
-
-        IntPtr ptr = Marshal.AllocHGlobal(size);
-        Marshal.StructureToPtr(data, ptr, true);
-        Marshal.Copy(ptr, bytes, 0, size);
-        Marshal.FreeHGlobal(ptr);
-
-        writer.Write(bytes, 0, size);
-    }
-    private static uint MakeID(string id)
-    {
-        byte[] bytes = Encoding.ASCII.GetBytes(id);
-        return BitConverter.ToUInt32(bytes, 0);
     }
     private static string GetID(uint id)
     {
